@@ -9,14 +9,14 @@ using System.Text;
 
 namespace PinusClient
 {
-    class Client : Node, IConnection, IObservable<NetworkStatus>
+    class Client : Node, IConnection
     {
         private static readonly Logger _log = LoggerHelper.GetLogger(typeof(Client));
 
         #region IObservable<NetworkStatus>
 
-        private event Action<NetworkStatus> OnNetworkStatus;
-        private NetworkStatus _networkStatus = NetworkStatus.Unknown;
+        public event Action<NetworkStatus> OnNetworkStatusChanged;
+        public NetworkStatus _networkStatus = NetworkStatus.Unknown;
 
         public void NetworkStatusChanged(NetworkStatus status)
         {
@@ -24,7 +24,7 @@ namespace PinusClient
             {
                 _networkStatus = status;
 
-                OnNetworkStatus?.Invoke(_networkStatus);
+                OnNetworkStatusChanged?.Invoke(_networkStatus);
 
                 if (status == NetworkStatus.Connected)
                 {
@@ -37,13 +37,6 @@ namespace PinusClient
                     _transporter.Send(handshakePackage);
                 }
             }
-        }
-
-        public IDisposable Subscribe(IObserver<NetworkStatus> observer)
-        {
-            OnNetworkStatus += (status) => observer.OnNext(status);
-
-            return Disposable.Empty;
         }
 
         #endregion
