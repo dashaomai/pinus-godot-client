@@ -1,4 +1,5 @@
 using Godot;
+using GodotLogger;
 using Newtonsoft.Json.Linq;
 using PinusClient.Protocol;
 using PinusClient.Transporter;
