@@ -4,7 +4,6 @@ using Newtonsoft.Json.Linq;
 using PinusClient.Protocol;
 using PinusClient.Transporter;
 using System;
-using System.Reactive.Disposables;
 using System.Text;
 
 namespace PinusClient
@@ -29,34 +28,16 @@ namespace PinusClient
                 if (status == NetworkStatus.Connected)
                 {
                     // 连接已建立，开始握手
-                    ProtocolState = ProtocolState.Handshaking;
+                    NetworkStatusChanged(NetworkStatus.Handshaking);
 
                     byte[] handshakeBytes = HandShakeService.GetHandShakeBytes();
                     byte[] handshakePackage = PackageProtocol.Encode(PackageType.PKG_HANDSHAKE, handshakeBytes);
 
                     _transporter.Send(handshakePackage);
                 }
-            }
-        }
-
-        #endregion
-
-        #region ProtocolStatus
-
-        private ProtocolState _protocolState = ProtocolState.Unknown;
-        private ProtocolState ProtocolState
-        {
-            get { return _protocolState; }
-            set {
-                if (value != _protocolState)
+                else if (status == NetworkStatus.Ready)
                 {
-                    _protocolState = value;
-
-                    if (value == ProtocolState.Working)
-                    {
-                        // 创建请求管理器
-                        _eventManager = new EventManager();
-                    }
+                    _eventManager = new EventManager();
                 }
             }
         }
@@ -93,11 +74,11 @@ namespace PinusClient
 
         public override void _Process(float delta)
         {
-            if (_networkStatus == NetworkStatus.Connected || _networkStatus == NetworkStatus.Connecting)
+            if (_networkStatus >= NetworkStatus.Connecting)
             {
                 _transporter?.Process(delta);
 
-                if (_networkStatus == NetworkStatus.Connected)
+                if (_networkStatus == NetworkStatus.Ready)
                 {
                     _heartBeatService?.Process(delta);
                 }
@@ -120,21 +101,20 @@ namespace PinusClient
             Package pkg = PackageProtocol.Decode(package);
 
             //Ignore all the message except handshading at handshake stage
-            if (pkg.Type == PackageType.PKG_HANDSHAKE && this.ProtocolState == ProtocolState.Handshaking)
+            if (pkg.Type == PackageType.PKG_HANDSHAKE && this._networkStatus == NetworkStatus.Handshaking)
             {
                 //Ignore all the message except handshading
                 //var data = JsonConvert.DeserializeObject(Encoding.UTF8.GetString(pkg.body));
                 JObject data = JObject.Parse(Encoding.UTF8.GetString(pkg.Body));
-                ProtocolState = ProtocolState.Working;
                 ProcessHandshakeData(data);
             }
-            else if (pkg.Type == PackageType.PKG_HEARTBEAT && this.ProtocolState == ProtocolState.Working)
+            else if (pkg.Type == PackageType.PKG_HEARTBEAT && this._networkStatus == NetworkStatus.Ready)
             {
                 _log.Debug("heartbeat received");
 
                 this._heartBeatService.Reset();
             }
-            else if (pkg.Type == PackageType.PKG_DATA && this.ProtocolState == ProtocolState.Working)
+            else if (pkg.Type == PackageType.PKG_DATA && this._networkStatus == NetworkStatus.Ready)
             {
                 this._heartBeatService.Reset();
                 ProcessMessage(_messageProtocol.decode(pkg.Body));
@@ -190,6 +170,8 @@ namespace PinusClient
             //Invoke handshake callback
             JObject user = msg.ContainsKey("user") ? (JObject)msg["user"] : new JObject();
             OnHandshakeCompleted?.Invoke(user);
+
+            NetworkStatusChanged(NetworkStatus.Ready);
         }
 
         private void HandshakeAck()
@@ -206,7 +188,7 @@ namespace PinusClient
 
         private void _OnHeartbeatTimeout()
         {
-            _log.Debug("heartbeat timeout!");
+            _log.Warn("heartbeat timeout!");
         }
 
         #endregion
@@ -241,7 +223,7 @@ namespace PinusClient
 
         private void Send(PackageType type, byte[] data)
         {
-            if (_protocolState == ProtocolState.Working)
+            if (_networkStatus >= NetworkStatus.Connected)
             {
                 byte[] pkg = PackageProtocol.Encode(type, data);
                 _transporter?.Send(pkg);
@@ -252,7 +234,7 @@ namespace PinusClient
 
         #region Client
 
-        private static readonly object emptyMessage = new {};
+        private static readonly object emptyMessage = new { };
 
         private uint requestId = 1;
 
@@ -261,18 +243,22 @@ namespace PinusClient
             Request(route, emptyMessage, callback);
         }
 
-        public void Request(string route, object payload, Action<JObject> callback)
+        public void Request(string route, in object payload, Action<JObject> callback)
         {
             // _log.Debug($"request to {route} with payload {payload} in requestId {requestId}");
-
-            _eventManager.AddCallBack(requestId, callback);
-            ProtocolSend(route, requestId, payload);
-
-            requestId++;
-            // 自己单独加回的请求 id 循环逻辑，和早期 Pomelo 协议基本吻合（早期 Pomelo 协议到 127 就循环）
-            if (requestId == 0xFF)
+            if (_networkStatus == NetworkStatus.Ready)
             {
-                requestId = 1;
+
+                _eventManager.AddCallBack(requestId, callback);
+                ProtocolSend(route, requestId, payload);
+
+                requestId++;
+                // 自己单独加回的请求 id 循环逻辑，和早期 Pomelo 协议基本吻合（早期 Pomelo 协议到 127 就循环）
+                if (requestId == 0xFF)
+                {
+                    requestId = 1;
+                }
+
             }
         }
 
@@ -283,12 +269,9 @@ namespace PinusClient
 
         private void ProtocolSend(string route, uint requestId, object payload)
         {
-            if (_protocolState == ProtocolState.Working)
-            {
-                byte[] package = _messageProtocol.encode(route, requestId, JObject.FromObject(payload));
+            byte[] package = _messageProtocol.encode(route, requestId, JObject.FromObject(payload));
 
-                Send(PackageType.PKG_DATA, package);
-            }
+            Send(PackageType.PKG_DATA, package);
         }
 
         #endregion
