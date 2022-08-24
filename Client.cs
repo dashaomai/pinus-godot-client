@@ -37,7 +37,6 @@ namespace PinusClient
                 }
                 else if (status == NetworkStatus.Ready)
                 {
-                    _eventManager = new EventManager();
                 }
             }
         }
@@ -195,7 +194,7 @@ namespace PinusClient
 
         #region Message
 
-        private EventManager _eventManager;
+        private readonly EventManager _eventManager = new EventManager();
 
         private void ProcessMessage(Message msg)
         {
@@ -260,6 +259,11 @@ namespace PinusClient
                 }
 
             }
+        }
+
+        public void On(string route, Action<JObject> callback)
+        {
+            _eventManager.AddOnEvent(route, callback);
         }
 
         private void ProtocolSend(string route, object payload)
